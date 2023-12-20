@@ -4,17 +4,15 @@ import requests
 import datetime
 from vertexai.preview import generative_models
 from vertexai.preview.generative_models import GenerativeModel
-
+import wandb
 from google.cloud import aiplatform
 from google.oauth2 import service_account
 import json
-
+import time 
 # docs 
 # https://cloud.google.com/vertex-ai/docs/start/install-sdk
 # https://cloud.google.com/vertex-ai/docs/generative-ai/multimodal/function-calling
 # Base API URLs for each sport
-
-
 
 
 cred = {
@@ -29,15 +27,17 @@ cred = {
     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
     "client_x509_cert_url": "[URL to the service account's public x509 certificate]"
 }
+
+
 credentials = service_account.Credentials.from_service_account_info(cred)
 
-# Initialize the Vertex AI SDK
 aiplatform.init(
-    project='dsports-6ab79',
-    location='us-central1',  # change this if you're using a different region
-    staging_bucket='gs://artifacts.dsports-6ab79.appspot.com',
+    project='your project id',
+    location='region. eg: us-central1',  # change this if you're using a different region
+    staging_bucket='your storage bucket',
     credentials=credentials,
 )
+# Initialize the Vertex AI SDK
 
 
 api_urls = {
@@ -160,3 +160,76 @@ args = model_response.candidates[0].content.parts[0].function_call.args.pb
 
 
 print(getGameTime(args.get("sport").string_value, args.get("teamName").string_value))
+
+
+###### W&B eval 
+
+# Initialize wandb
+wandb.init(project="Game Time Analysis")
+
+# Create a wandb Table to log the results
+results_table = wandb.Table(columns=["Query", "Predicted Sport", "Predicted Team", "Ground Truth Sport", "Ground Truth Team"])
+
+queries_and_truths = [
+    # Football queries
+    ("what time do the chiefs play?", ("football", "Chiefs")),
+    ("when is the next packers game?", ("football", "Packers")),
+    ("time for the broncos game", ("football", "Broncos")),
+    ("dallas cowboys game schedule", ("football", "Cowboys")),
+    ("new england patriots next game", ("football", "Patriots")),
+    ("seahawks game start time", ("football", "Seahawks")),
+    ("buccaneers upcoming game", ("football", "Buccaneers")),
+    ("49ers game tonight", ("football", "49ers")),
+    
+    # Basketball queries
+    ("lakers game tonight?", ("basketball", "Lakers")),
+    ("heat game start time", ("basketball", "Heat")),
+    ("warriors next game time", ("basketball", "Warriors")),
+    ("celtics game schedule", ("basketball", "Celtics")),
+    ("bucks next game", ("basketball", "Bucks")),
+    ("suns game time", ("basketball", "Suns")),
+    
+    # Baseball queries
+    ("yankees game today", ("baseball", "Yankees")),
+    ("dodgers game start time", ("baseball", "Dodgers")),
+    ("time for braves next game", ("baseball", "Braves")),
+    ("mets game schedule", ("baseball", "Mets")),
+    ("cubs game tonight", ("baseball", "Cubs")),
+    ("astros next game", ("baseball", "Astros"))
+]
+
+
+# Function to check accuracy
+def check_accuracy(predicted, truth):
+    return 1 if predicted.lower() == truth.lower() else 0
+
+# Process each query
+correct_sports, correct_teams, total_queries = 0, 0, len(queries_and_truths)
+for query, (truth_sport, truth_team) in queries_and_truths:
+    # Call the model for inference
+    model_response = model.generate_content(
+        query,
+        generation_config={"temperature": 0},
+        tools=[gametime_tool],
+    )
+    args = model_response.candidates[0].content.parts[0].function_call.args.pb
+    predicted_sport = args.get("sport").string_value
+    predicted_team = args.get("teamName").string_value
+
+    # Calculate accuracies
+    sport_accuracy = check_accuracy(predicted_sport, truth_sport)
+    team_accuracy = check_accuracy(predicted_team, truth_team)
+    correct_sports += sport_accuracy
+    correct_teams += team_accuracy
+
+    # Log to wandb table
+    results_table.add_data(query, predicted_sport, predicted_team, truth_sport, truth_team)
+    time.sleep(10)
+
+
+wandb.log({f"Game_Time_Queries": results_table})
+# Calculate and log overall accuracies
+overall_sport_accuracy = correct_sports / total_queries
+overall_team_accuracy = correct_teams / total_queries
+wandb.log({"Overall Sport Accuracy": overall_sport_accuracy, "Overall Team Accuracy": overall_team_accuracy})
+
